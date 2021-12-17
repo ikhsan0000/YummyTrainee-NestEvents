@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DeleteResult, Repository } from 'typeorm';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -7,6 +7,7 @@ import { UpdateEventDto } from './dto/update-event.dto'
 import { Attendee, AttendeeAnswerEnum } from './entities/attendee.entity';
 import { ListEvents, WhenEventFilter } from './enum/list.events';
 import { paginate, PaginateOptions, PaginationResult } from '../pagination/pagintaor';
+import { User } from '../auth/entities/user.entity';
 
 @Injectable()
 export class EventsService {
@@ -17,7 +18,7 @@ export class EventsService {
     @InjectRepository(Event) private readonly eventRepository: Repository<Event>,
     @InjectRepository(Attendee) private readonly attendeeRepository: Repository<Attendee>
   ){}
-
+  
   async findAll(filter?: ListEvents)
   {
     // return this.eventRepository.find({relations:['attendees']});
@@ -27,7 +28,7 @@ export class EventsService {
     {
       return query
     }
-
+    
     if(filter.when)
     {
       if(filter.when == WhenEventFilter.Today){
@@ -38,7 +39,7 @@ export class EventsService {
       if(filter.when == WhenEventFilter.Tommorow){
         query = query.andWhere(
           `e.time >= CURDATE() + INTERVAL 1 DAY AND e.time <= CURDATE() + INTERVAL 2 DAY`
-        );
+          );
       }
       if(filter.when == WhenEventFilter.ThisWeek){
         query = query.andWhere(
@@ -87,23 +88,28 @@ export class EventsService {
     return event
   }
 
-
-  async create(body: CreateEventDto)
+  async create(createEventDto: CreateEventDto, user: User): Promise<Event>
   {
-    const event = {
-      ...body,
-      time: new Date(body.time),
-    }
-    return this.eventRepository.save(event);
+    return await this.eventRepository.save({
+      ...createEventDto,
+      organizer: user,
+      when: new Date(createEventDto.time)
+    })
   }
 
-  async update(id: number, body: UpdateEventDto)
+
+  async update(id: number, body: UpdateEventDto, user: User)
   {
     const event = await this.eventRepository.findOne({id: id});
 
     if(!event)
     {
       throw new NotFoundException();
+    }
+
+    if(event.organizer.id !== user.id)
+    {
+      throw new ForbiddenException(null, 'you are not authorized to modify this event');
     }
 
     return await this.eventRepository.save({
@@ -140,6 +146,7 @@ export class EventsService {
   async getEventWithAttendeeCount()
   {
     return this.getEventBasedQuery()
+    .loadAllRelationIds()
     .loadRelationCountAndMap(
       'e.attendeeCount', 'e.attendees'
     )
@@ -164,8 +171,21 @@ export class EventsService {
     .orderBy('e.id', 'DESC');
   }
 
-  async deleteEvent(id: number): Promise<DeleteResult>
+
+  async deleteEvent(id: number, user: User): Promise<DeleteResult>
   {
+    const event = await this.eventRepository.findOne({id: id})
+
+    if(!event)
+    {
+      throw new NotFoundException();
+    }
+
+    if(event.organizer.id !== user.id)
+    {
+      throw new ForbiddenException(null, 'you are not authorized to remove this event');
+    }
+
     return await this.eventRepository
     .createQueryBuilder('e')
     .delete()

@@ -1,4 +1,7 @@
-import { Body, Controller, Delete, Get, HttpCode, Logger, NotFoundException, Param, ParseIntPipe, Patch, Post, Query, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Logger, NotFoundException, Param, ParseIntPipe, Patch, Post, Query, UseGuards, ValidationPipe } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { User } from '../auth/entities/user.entity';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ListEvents } from './enum/list.events';
 import { EventsService } from './events.service';
@@ -40,27 +43,29 @@ export class EventsController {
   }
 
   @Post()
-  create(@Body() body: CreateEventDto){
-    return this.eventsService.create(body);
+  @UseGuards(AuthGuard('jwt'))
+  create(@Body() body: CreateEventDto, @CurrentUser() user: User){
+    return this.eventsService.create(body, user);
   }
 
   @Patch(':id')
-  update(@Param('id', ParseIntPipe) id, @Body() body: CreateEventDto){
-    return this.eventsService.update(id, body)
+  async update(
+    @Param('id', ParseIntPipe) id, 
+    @Body() body: CreateEventDto,
+    @CurrentUser() user: User){
+    return this.eventsService.update(id, body, user)
   }
 
   @Delete(':id')
+  @UseGuards(AuthGuard('jwt'))
   @HttpCode(204)
-  async remove(@Param('id', ParseIntPipe) id){
+  async remove(@Param('id', ParseIntPipe) id, @CurrentUser() user: User){
     // return this.eventsService.delete(id)
+    const result = await this.eventsService.deleteEvent(id, user)
 
-    const result = await this.eventsService.deleteEvent(id)
-
-    if(result.affected !== 1)
+    if(result.affected !== 1)     //using query builder
     {
       throw new NotFoundException();
     }
-
-    
   }
 }

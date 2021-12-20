@@ -1,8 +1,8 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DeleteResult, Repository } from 'typeorm';
+import { DeleteResult, Repository, SelectQueryBuilder } from 'typeorm';
 import { CreateEventDto } from './dto/create-event.dto';
-import { Event } from './entities/event.entity';
+import { Event, PaginatedEvents } from './entities/event.entity';
 import { UpdateEventDto } from './dto/update-event.dto'
 import { Attendee, AttendeeAnswerEnum } from './entities/attendee.entity';
 import { ListEvents, WhenEventFilter } from './enum/list.events';
@@ -16,7 +16,6 @@ export class EventsService {
 
   constructor(
     @InjectRepository(Event) private readonly eventRepository: Repository<Event>,
-    @InjectRepository(Attendee) private readonly attendeeRepository: Repository<Attendee>
   ){}
   
   async findAll(filter?: ListEvents)
@@ -61,22 +60,22 @@ export class EventsService {
     return query;
   }
 
-  async findAllPaginated(filter: ListEvents,  paginateOptions: PaginateOptions)
+  async findAllPaginated(filter: ListEvents,  paginateOptions: PaginateOptions): Promise<PaginatedEvents>
   {
     return await paginate(await this.findAll(filter), paginateOptions);
   }
 
-  async attendeeRelationTest() //not used
-  {
-    const event = await this.eventRepository.findOne({id : 1})
-    const attendee = new Attendee();
+  // async attendeeRelationTest() //not used
+  // {
+  //   const event = await this.eventRepository.findOne({id : 1})
+  //   const attendee = new Attendee();
 
-    attendee.name = 'Terry';
-    attendee.event = event;
+  //   attendee.name = 'Terry';
+  //   attendee.event = event;
 
-    await this.attendeeRepository.save(attendee);
-    return event;
-  }
+  //   await this.attendeeRepository.save(attendee);
+  //   return event;
+  // }
 
   findOne(id: number)
   {
@@ -90,11 +89,22 @@ export class EventsService {
 
   async create(createEventDto: CreateEventDto, user: User): Promise<Event>
   {
-    return await this.eventRepository.save({
-      ...createEventDto,
-      organizer: user,
-      when: new Date(createEventDto.time)
-    })
+    //This returns plain json, which serializer cannot serialize
+    // return await this.eventRepository.save({
+    //   ...createEventDto,
+    //   organizer: user,
+    //   time: new Date(createEventDto.time)
+    // })
+
+
+    return await this.eventRepository.save(
+      new Event({
+        ...createEventDto,
+        organizer: user,
+        time: new Date(createEventDto.time)
+      })
+    )
+
   }
 
 
@@ -112,11 +122,12 @@ export class EventsService {
       throw new ForbiddenException(null, 'you are not authorized to modify this event');
     }
 
-    return await this.eventRepository.save({
+    return await this.eventRepository.save(new Event({
       ...event,
       ...body,
-      when: body.time ? new Date(body.time) : event.time
-    })
+      time: body.time ? new Date(body.time) : event.time
+      })
+    )
   }
 
   async delete(id: number)
@@ -164,33 +175,59 @@ export class EventsService {
     )
   }
 
-  private getEventBasedQuery()
+  private getEventBasedQuery(): SelectQueryBuilder<Event>
   {
     return this.eventRepository
     .createQueryBuilder('e')
     .orderBy('e.id', 'DESC');
   }
 
-
-  async deleteEvent(id: number, user: User): Promise<DeleteResult>
+  async getEventsOrganizedByUserIdPaginated(userId: number, paginateOptions: PaginateOptions): Promise<PaginatedEvents>
   {
-    const event = await this.eventRepository.findOne({id: id})
+    return await paginate<Event>(
+      this.getEventsOrganizedByUserIdQuery(userId), 
+      paginateOptions
+    )
+  }
 
+  private getEventsOrganizedByUserIdQuery(userId: number): SelectQueryBuilder<Event>
+  {
+    return this.getEventBasedQuery().where('e.organizerId = :userId', { userId })
+  }
+
+
+  async getEventsAttendedByUserIdPaginated(userId: number, paginateOptions: PaginateOptions): Promise<PaginatedEvents>
+  {
+    return await paginate<Event>(
+      this.getEventsAttendedByUserIdQuery(userId), 
+      paginateOptions
+    )
+  }
+
+  private getEventsAttendedByUserIdQuery(userId: number): SelectQueryBuilder<Event>
+  {
+    return this.getEventBasedQuery()
+    .leftJoinAndSelect('e.attendees', 'a')
+    .where('a.userId = :userId', {userId})
+  }
+
+
+  async deleteEvent(id: number, user: User)
+  {
+    const event = await this.eventRepository.findOne({id: id}, {relations: ['organizer']})
+    console.log(id)
     if(!event)
     {
       throw new NotFoundException();
     }
-
-    if(event.organizer.id !== user.id)
+    else if(event.organizer.id !== user.id)
     {
-      throw new ForbiddenException(null, 'you are not authorized to remove this event');
+      throw new ForbiddenException('you are not authorized to remove this event');
     }
-
-    return await this.eventRepository
-    .createQueryBuilder('e')
-    .delete()
-    .where('id = :id', {id})
-    .execute();
+    else
+    {
+      return await this.eventRepository.delete({id: id})
+    }
   }
 
 
